@@ -1,5 +1,6 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js';
+
 const ui = {
   poly: document.getElementById('poly'),
   buildBtn: document.getElementById('buildBtn'),
@@ -31,6 +32,7 @@ scene.add(polyGroup);
 
 let current = {
   terms: [],
+  originalPoints: [],
   points: [],
   faces: [],
   triangles: [],
@@ -93,23 +95,52 @@ function primitive(v) {
 }
 
 function parsePolynomial(input) {
-  const normalized = input.replace(/\s+/g, '').replace(/-/g, '+-');
-  const chunks = normalized.split('+').filter(Boolean);
+  const normalized = input.replace(/\s+/g, '').replace(/\*/g, '');
+  if (!normalized) throw new Error('Polynomial is empty.');
+  const chunks = [];
+  let start = 0;
+  for (let i = 1; i < normalized.length; i++) {
+    const ch = normalized[i];
+    if ((ch === '+' || ch === '-') && normalized[i - 1] !== '^') {
+      chunks.push(normalized.slice(start, i));
+      start = i;
+    }
+  }
+  chunks.push(normalized.slice(start));
+  const cleanedChunks = chunks.filter((x) => x && x !== '+' && x !== '-');
   const terms = [];
 
-  for (const raw of chunks) {
-    const factors = raw.split('*').filter(Boolean);
-    let exp = { x: 0, y: 0, z: 0 };
-    for (let factor of factors) {
-      if (/^[+-]?\d+(\.\d+)?$/.test(factor)) continue;
-      factor = factor.replace(/^\+/, '');
-      const m = factor.match(/^([xyz])(\^(\-?\d+))?$/);
-      if (!m) throw new Error(`Cannot parse factor "${factor}". Only x,y,z monomials supported.`);
-      const variable = m[1];
-      const p = m[3] ? parseInt(m[3], 10) : 1;
-      exp[variable] += p;
+  for (const raw of cleanedChunks) {
+    let term = raw;
+    let sign = 1;
+    if (term[0] === '+') term = term.slice(1);
+    else if (term[0] === '-') {
+      sign = -1;
+      term = term.slice(1);
     }
-    terms.push({ raw, exponent: [exp.x, exp.y, exp.z] });
+    if (!term) continue;
+
+    const coeffMatch = term.match(/^\d+(\.\d+)?/);
+    if (coeffMatch) term = term.slice(coeffMatch[0].length);
+    if (!term && coeffMatch) {
+      terms.push({ raw, exponent: [0, 0, 0], sign });
+      continue;
+    }
+
+    let exp = { x: 0, y: 0, z: 0 };
+    let pos = 0;
+    while (pos < term.length) {
+      const m = term.slice(pos).match(/^([xyz])(?:\^(-?\d+))?/);
+      if (!m) {
+        throw new Error(`Cannot parse term "${raw}". Use variables x,y,z with optional integer exponents.`);
+      }
+      const variable = m[1];
+      const p = m[2] ? parseInt(m[2], 10) : 1;
+      exp[variable] += p;
+      pos += m[0].length;
+    }
+
+    terms.push({ raw, exponent: [exp.x, exp.y, exp.z], sign });
   }
 
   const seen = new Set();
@@ -427,19 +458,10 @@ function selectFace(idx) {
   renderHighlights();
 }
 
-function rebuild() {
-  let terms;
-  try {
-    terms = parsePolynomial(ui.poly.value);
-  } catch (err) {
-    alert(err.message);
-    return;
-  }
-
-  const points = terms.map((t) => t.exponent);
+function loadPolytopeFromPoints(points) {
   if (new Set(points.map((p) => p.join(','))).size < 4) {
     alert('Need at least 4 distinct monomials for a 3D convex hull.');
-    return;
+    return false;
   }
 
   let faces;
@@ -447,11 +469,11 @@ function rebuild() {
     faces = convexHullFaces(points);
   } catch (err) {
     alert(err.message);
-    return;
+    return false;
   }
 
   const triangles = triangulateFaces(points, faces);
-  current = { ...current, terms, points, faces, triangles, hoverFace: -1, selectedFace: -1 };
+  current = { ...current, points, faces, triangles, hoverFace: -1, selectedFace: -1 };
   drawPolytope(points, triangles);
 
   ui.faceList.innerHTML = '';
@@ -464,9 +486,25 @@ function rebuild() {
   });
 
   ui.faceInfo.textContent = 'None selected.';
-  ui.basisInfo.textContent = 'No basis change computed yet.';
   ui.basisBtn.disabled = true;
   renderHighlights();
+  return true;
+}
+
+function rebuild() {
+  let terms;
+  try {
+    terms = parsePolynomial(ui.poly.value);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+
+  const points = terms.map((t) => t.exponent);
+  current = { ...current, terms, originalPoints: points };
+  if (loadPolytopeFromPoints(points)) {
+    ui.basisInfo.textContent = 'No basis change computed yet.';
+  }
 }
 
 ui.buildBtn.onclick = rebuild;
@@ -478,6 +516,8 @@ ui.basisBtn.onclick = () => {
     const basis = findUnimodularBasisWithNormal(n);
     const inv = inverseIntegerMatrixColumns(basis.u, basis.v, basis.n);
     const transformed = transformExponents(current.terms, inv);
+    const transformedPoints = transformed.map((t) => t.transformed);
+    const loaded = loadPolytopeFromPoints(transformedPoints);
 
     ui.basisInfo.innerHTML = `
       Unimodular basis matrix M (columns u,v,n):<br>
@@ -488,6 +528,11 @@ ui.basisBtn.onclick = () => {
       Transformed support polynomial (symbolic exponents):<br>
       <code>${formatPolynomialTransformed(transformed)}</code>
     `;
+
+    if (loaded) {
+      const canonical = current.faces.findIndex((f) => f.normal[0] === 0 && f.normal[1] === 0 && f.normal[2] === 1);
+      if (canonical >= 0) selectFace(canonical);
+    }
   } catch (err) {
     ui.basisInfo.textContent = err.message;
   }

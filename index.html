@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Newton Polytope Visualizer</title>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0b0e14;
+      color: #e6edf3;
+      font-family: Arial, sans-serif;
+    }
+
+    #app {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      height: 100vh;
+    }
+
+    #sidebar {
+      padding: 16px;
+      overflow: auto;
+      background: #161b22;
+      border-right: 1px solid #30363d;
+    }
+
+    #viewer {
+      width: 100%;
+      height: 100vh;
+      display: block;
+    }
+
+    textarea, button {
+      width: 100%;
+      margin-bottom: 12px;
+      box-sizing: border-box;
+    }
+
+    textarea {
+      min-height: 80px;
+    }
+
+    .face-item {
+      padding: 8px;
+      margin-bottom: 6px;
+      border: 1px solid #30363d;
+      cursor: pointer;
+    }
+
+    .face-item.active {
+      background: #1f6feb;
+    }
+
+    code {
+      background: #0d1117;
+      padding: 2px 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <textarea id="poly">1 + x^2 + y^2 + z^2 + x*y*z</textarea>
+      <button id="buildBtn">Build polytope</button>
+
+      <h3>Faces</h3>
+      <div id="faceList"></div>
+
+      <h3>Face info</h3>
+      <div id="faceInfo">None selected.</div>
+
+      <button id="basisBtn" disabled>Change basis</button>
+
+      <h3>Basis info</h3>
+      <div id="basisInfo">No basis change computed yet.</div>
+    </div>
+
+    <canvas id="viewer"></canvas>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

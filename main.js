@@ -95,7 +95,7 @@ function primitive(v) {
 }
 
 function parsePolynomial(input) {
-  const normalized = input.replace(/\s+/g, '').replace(/\*/g, '');
+  const normalized = normalizePolynomialInput(input);
   if (!normalized) throw new Error('Polynomial is empty.');
   const chunks = [];
   let start = 0;
@@ -153,6 +153,28 @@ function parsePolynomial(input) {
     }
   }
   return unique;
+}
+
+function invertMonomialString(s) {
+  const monomial = s.replace(/\*/g, '');
+  let out = '';
+  let pos = 0;
+  while (pos < monomial.length) {
+    const m = monomial.slice(pos).match(/^([xyz])(?:\^(-?\d+))?/);
+    if (!m) throw new Error(`Unsupported denominator monomial "${s}".`);
+    const v = m[1];
+    const p = m[2] ? parseInt(m[2], 10) : 1;
+    out += `${v}^${-p}`;
+    pos += m[0].length;
+  }
+  return out;
+}
+
+function normalizePolynomialInput(input) {
+  let expr = input.replace(/\s+/g, '');
+  expr = expr.replace(/1\/\(([^()]+)\)/g, (_, denom) => invertMonomialString(denom));
+  expr = expr.replace(/[()]/g, '');
+  return expr.replace(/\*/g, '');
 }
 
 function convexHullFaces(points) {
@@ -369,19 +391,33 @@ function frameCameraToPoints(points) {
   controls.update();
 }
 
-function findUnimodularBasisWithNormal(n) {
+function findUnimodularRowsWithNormal(n) {
   const limit = 6;
+  const seeds = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [1, 1, 0],
+    [1, 0, 1],
+    [0, 1, 1],
+  ];
+  for (const r1 of seeds) {
+    for (const r2 of seeds) {
+      const det = determinant3(r1, r2, n);
+      if (Math.abs(det) === 1) return { r1, r2, n, det };
+    }
+  }
   for (let a = -limit; a <= limit; a++) {
     for (let b = -limit; b <= limit; b++) {
       for (let c = -limit; c <= limit; c++) {
-        const u = [a, b, c];
+        const r1 = [a, b, c];
         for (let d = -limit; d <= limit; d++) {
           for (let e = -limit; e <= limit; e++) {
             for (let f = -limit; f <= limit; f++) {
-              const v = [d, e, f];
-              const det = determinant3(u, v, n);
+              const r2 = [d, e, f];
+              const det = determinant3(r1, r2, n);
               if (Math.abs(det) === 1) {
-                return { u, v, n, det };
+                return { r1, r2, n, det };
               }
             }
           }
@@ -424,14 +460,32 @@ function transformExponents(terms, invM) {
   });
 }
 
+function applyRowMatrix(points, rows) {
+  return points.map((p) => ([
+    rows[0][0] * p[0] + rows[0][1] * p[1] + rows[0][2] * p[2],
+    rows[1][0] * p[0] + rows[1][1] * p[1] + rows[1][2] * p[2],
+    rows[2][0] * p[0] + rows[2][1] * p[1] + rows[2][2] * p[2],
+  ]));
+}
+
 function formatPolynomialTransformed(transformedTerms) {
+  const factor = (v, p) => p === 1 ? v : `${v}^${p}`;
   return transformedTerms.map((t) => {
     const [a, b, c] = t.transformed;
-    const factors = [];
-    if (a !== 0) factors.push(`X${a === 1 ? '' : '^' + a}`);
-    if (b !== 0) factors.push(`Y${b === 1 ? '' : '^' + b}`);
-    if (c !== 0) factors.push(`Z${c === 1 ? '' : '^' + c}`);
-    return factors.length ? factors.join('*') : '1';
+    const pos = [];
+    const neg = [];
+    if (a > 0) pos.push(factor('x', a));
+    if (b > 0) pos.push(factor('y', b));
+    if (c > 0) pos.push(factor('z', c));
+    if (a < 0) neg.push(factor('x', -a));
+    if (b < 0) neg.push(factor('y', -b));
+    if (c < 0) neg.push(factor('z', -c));
+    const num = pos.join('');
+    const den = neg.join('');
+    if (!num && !den) return '1';
+    if (!den) return num;
+    if (!num) return `1/(${den})`;
+    return `${num}/(${den})`;
   }).join(' + ');
 }
 
@@ -513,19 +567,24 @@ ui.basisBtn.onclick = () => {
   const n = current.faces[current.selectedFace].normal;
 
   try {
-    const basis = findUnimodularBasisWithNormal(n);
-    const inv = inverseIntegerMatrixColumns(basis.u, basis.v, basis.n);
-    const transformed = transformExponents(current.terms, inv);
-    const transformedPoints = transformed.map((t) => t.transformed);
+    const basis = findUnimodularRowsWithNormal(n);
+    const rowMatrix = [basis.r1, basis.r2, basis.n];
+    const transformedPoints = applyRowMatrix(current.terms.map((t) => t.exponent), rowMatrix);
+    const transformed = current.terms.map((t, i) => ({ ...t, transformed: transformedPoints[i] }));
     const loaded = loadPolytopeFromPoints(transformedPoints);
+    const inv = inverseIntegerMatrixColumns(
+      [rowMatrix[0][0], rowMatrix[1][0], rowMatrix[2][0]],
+      [rowMatrix[0][1], rowMatrix[1][1], rowMatrix[2][1]],
+      [rowMatrix[0][2], rowMatrix[1][2], rowMatrix[2][2]],
+    );
 
     ui.basisInfo.innerHTML = `
-      Unimodular basis matrix M (columns u,v,n):<br>
-      <code>[${basis.u.join(', ')}; ${basis.v.join(', ')}; ${basis.n.join(', ')}]</code><br>
-      Inverse matrix M<sup>-1</sup>:<br>
+      Unimodular transform U (rows r1,r2,n):<br>
+      <code>[${basis.r1.join(', ')}; ${basis.r2.join(', ')}; ${basis.n.join(', ')}]</code><br>
+      Inverse transform U<sup>-1</sup>:<br>
       <code>[${inv[0].join(', ')}; ${inv[1].join(', ')}; ${inv[2].join(', ')}]</code><br>
       In transformed coordinates, selected face normal is <code>(0,0,1)</code>.<br>
-      Transformed support polynomial (symbolic exponents):<br>
+      Transformed support polynomial:<br>
       <code>${formatPolynomialTransformed(transformed)}</code>
     `;
 

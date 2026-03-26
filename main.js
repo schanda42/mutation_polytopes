@@ -32,6 +32,7 @@ scene.add(polyGroup);
 
 let current = {
   terms: [],
+  originalPoints: [],
   points: [],
   faces: [],
   triangles: [],
@@ -457,19 +458,10 @@ function selectFace(idx) {
   renderHighlights();
 }
 
-function rebuild() {
-  let terms;
-  try {
-    terms = parsePolynomial(ui.poly.value);
-  } catch (err) {
-    alert(err.message);
-    return;
-  }
-
-  const points = terms.map((t) => t.exponent);
+function loadPolytopeFromPoints(points) {
   if (new Set(points.map((p) => p.join(','))).size < 4) {
     alert('Need at least 4 distinct monomials for a 3D convex hull.');
-    return;
+    return false;
   }
 
   let faces;
@@ -477,11 +469,11 @@ function rebuild() {
     faces = convexHullFaces(points);
   } catch (err) {
     alert(err.message);
-    return;
+    return false;
   }
 
   const triangles = triangulateFaces(points, faces);
-  current = { ...current, terms, points, faces, triangles, hoverFace: -1, selectedFace: -1 };
+  current = { ...current, points, faces, triangles, hoverFace: -1, selectedFace: -1 };
   drawPolytope(points, triangles);
 
   ui.faceList.innerHTML = '';
@@ -494,9 +486,25 @@ function rebuild() {
   });
 
   ui.faceInfo.textContent = 'None selected.';
-  ui.basisInfo.textContent = 'No basis change computed yet.';
   ui.basisBtn.disabled = true;
   renderHighlights();
+  return true;
+}
+
+function rebuild() {
+  let terms;
+  try {
+    terms = parsePolynomial(ui.poly.value);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+
+  const points = terms.map((t) => t.exponent);
+  current = { ...current, terms, originalPoints: points };
+  if (loadPolytopeFromPoints(points)) {
+    ui.basisInfo.textContent = 'No basis change computed yet.';
+  }
 }
 
 ui.buildBtn.onclick = rebuild;
@@ -508,6 +516,8 @@ ui.basisBtn.onclick = () => {
     const basis = findUnimodularBasisWithNormal(n);
     const inv = inverseIntegerMatrixColumns(basis.u, basis.v, basis.n);
     const transformed = transformExponents(current.terms, inv);
+    const transformedPoints = transformed.map((t) => t.transformed);
+    const loaded = loadPolytopeFromPoints(transformedPoints);
 
     ui.basisInfo.innerHTML = `
       Unimodular basis matrix M (columns u,v,n):<br>
@@ -518,6 +528,11 @@ ui.basisBtn.onclick = () => {
       Transformed support polynomial (symbolic exponents):<br>
       <code>${formatPolynomialTransformed(transformed)}</code>
     `;
+
+    if (loaded) {
+      const canonical = current.faces.findIndex((f) => f.normal[0] === 0 && f.normal[1] === 0 && f.normal[2] === 1);
+      if (canonical >= 0) selectFace(canonical);
+    }
   } catch (err) {
     ui.basisInfo.textContent = err.message;
   }

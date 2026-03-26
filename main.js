@@ -94,87 +94,207 @@ function primitive(v) {
   return p;
 }
 
-function parsePolynomial(input) {
-  const normalized = normalizePolynomialInput(input);
-  if (!normalized) throw new Error('Polynomial is empty.');
-  const chunks = [];
-  let start = 0;
-  for (let i = 1; i < normalized.length; i++) {
-    const ch = normalized[i];
-    if ((ch === '+' || ch === '-') && normalized[i - 1] !== '^') {
-      chunks.push(normalized.slice(start, i));
-      start = i;
-    }
-  }
-  chunks.push(normalized.slice(start));
-  const cleanedChunks = chunks.filter((x) => x && x !== '+' && x !== '-');
-  const terms = [];
-
-  for (const raw of cleanedChunks) {
-    let term = raw;
-    let sign = 1;
-    if (term[0] === '+') term = term.slice(1);
-    else if (term[0] === '-') {
-      sign = -1;
-      term = term.slice(1);
-    }
-    if (!term) continue;
-
-    const coeffMatch = term.match(/^\d+(\.\d+)?/);
-    if (coeffMatch) term = term.slice(coeffMatch[0].length);
-    if (!term && coeffMatch) {
-      terms.push({ raw, exponent: [0, 0, 0], sign });
-      continue;
-    }
-
-    let exp = { x: 0, y: 0, z: 0 };
-    let pos = 0;
-    while (pos < term.length) {
-      const m = term.slice(pos).match(/^([xyz])(?:\^(-?\d+))?/);
-      if (!m) {
-        throw new Error(`Cannot parse term "${raw}". Use variables x,y,z with optional integer exponents.`);
-      }
-      const variable = m[1];
-      const p = m[2] ? parseInt(m[2], 10) : 1;
-      exp[variable] += p;
-      pos += m[0].length;
-    }
-
-    terms.push({ raw, exponent: [exp.x, exp.y, exp.z], sign });
-  }
-
-  const seen = new Set();
-  const unique = [];
-  for (const t of terms) {
-    const key = t.exponent.join(',');
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(t);
-    }
-  }
-  return unique;
+function keyOf(exp) {
+  return exp.join(',');
 }
 
-function invertMonomialString(s) {
-  const monomial = s.replace(/\*/g, '');
-  let out = '';
-  let pos = 0;
-  while (pos < monomial.length) {
-    const m = monomial.slice(pos).match(/^([xyz])(?:\^(-?\d+))?/);
-    if (!m) throw new Error(`Unsupported denominator monomial "${s}".`);
-    const v = m[1];
-    const p = m[2] ? parseInt(m[2], 10) : 1;
-    out += `${v}^${-p}`;
-    pos += m[0].length;
+function parseKey(key) {
+  return key.split(',').map((x) => parseInt(x, 10));
+}
+
+function addPoly(a, b, scale = 1) {
+  const out = new Map(a);
+  for (const [k, v] of b.entries()) {
+    const nv = (out.get(k) || 0) + scale * v;
+    if (Math.abs(nv) < 1e-12) out.delete(k);
+    else out.set(k, nv);
   }
   return out;
 }
 
-function normalizePolynomialInput(input) {
-  let expr = input.replace(/\s+/g, '');
-  expr = expr.replace(/1\/\(([^()]+)\)/g, (_, denom) => invertMonomialString(denom));
-  expr = expr.replace(/[()]/g, '');
-  return expr.replace(/\*/g, '');
+function mulPoly(a, b) {
+  const out = new Map();
+  for (const [ka, va] of a.entries()) {
+    const ea = parseKey(ka);
+    for (const [kb, vb] of b.entries()) {
+      const eb = parseKey(kb);
+      const k = keyOf([ea[0] + eb[0], ea[1] + eb[1], ea[2] + eb[2]]);
+      out.set(k, (out.get(k) || 0) + va * vb);
+    }
+  }
+  for (const [k, v] of [...out.entries()]) {
+    if (Math.abs(v) < 1e-12) out.delete(k);
+  }
+  return out;
+}
+
+function powPoly(base, n) {
+  if (!Number.isInteger(n)) throw new Error('Exponent must be an integer.');
+  if (n < 0) throw new Error('Negative powers are only allowed on monomials in denominator form.');
+  let out = new Map([[keyOf([0, 0, 0]), 1]]);
+  let cur = base;
+  let p = n;
+  while (p > 0) {
+    if (p & 1) out = mulPoly(out, cur);
+    cur = mulPoly(cur, cur);
+    p >>= 1;
+  }
+  return out;
+}
+
+function powPolySigned(base, n) {
+  if (n >= 0) return powPoly(base, n);
+  if (base.size !== 1) throw new Error('Negative powers are only supported for monomials.');
+  const [[k, c]] = base.entries();
+  if (Math.abs(c) < 1e-12) throw new Error('Cannot invert zero monomial.');
+  const e = parseKey(k);
+  const m = -n;
+  return new Map([[keyOf([-e[0] * m, -e[1] * m, -e[2] * m]), 1 / (c ** m)]]);
+}
+
+function divideByMonomial(a, b) {
+  if (b.size !== 1) throw new Error('Division is only supported by monomials.');
+  const [[kb, cb]] = b.entries();
+  if (Math.abs(cb) < 1e-12) throw new Error('Division by zero.');
+  const eb = parseKey(kb);
+  const out = new Map();
+  for (const [ka, ca] of a.entries()) {
+    const ea = parseKey(ka);
+    out.set(keyOf([ea[0] - eb[0], ea[1] - eb[1], ea[2] - eb[2]]), ca / cb);
+  }
+  return out;
+}
+
+function scalarInteger(poly) {
+  if (poly.size !== 1) return null;
+  const [[k, c]] = poly.entries();
+  if (k !== '0,0,0') return null;
+  if (!Number.isInteger(c)) return null;
+  return c;
+}
+
+function tokenizePolynomial(input) {
+  const s = input.replace(/\s+/g, '');
+  const tokens = [];
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if ('+-*/^()'.includes(ch)) {
+      tokens.push({ type: ch, value: ch });
+      i++;
+      continue;
+    }
+    if (/[xyz]/.test(ch)) {
+      tokens.push({ type: 'var', value: ch });
+      i++;
+      continue;
+    }
+    if (/\d/.test(ch) || ch === '.') {
+      let j = i + 1;
+      while (j < s.length && /[\d.]/.test(s[j])) j++;
+      const num = Number(s.slice(i, j));
+      if (!Number.isFinite(num)) throw new Error(`Invalid number near "${s.slice(i, j)}".`);
+      tokens.push({ type: 'num', value: num });
+      i = j;
+      continue;
+    }
+    throw new Error(`Unexpected character "${ch}".`);
+  }
+  tokens.push({ type: 'eof', value: null });
+  return tokens;
+}
+
+function parsePolynomial(input) {
+  const tokens = tokenizePolynomial(input);
+  let pos = 0;
+
+  const peek = () => tokens[pos];
+  const consume = (type) => {
+    if (peek().type !== type) throw new Error(`Expected "${type}" but found "${peek().type}".`);
+    return tokens[pos++];
+  };
+  const startsPrimary = (t) => t.type === 'num' || t.type === 'var' || t.type === '(';
+
+  function parseExpression() {
+    let left = parseTerm();
+    while (peek().type === '+' || peek().type === '-') {
+      const op = consume(peek().type).type;
+      const right = parseTerm();
+      left = op === '+' ? addPoly(left, right) : addPoly(left, right, -1);
+    }
+    return left;
+  }
+
+  function parseTerm() {
+    let left = parsePower();
+    while (true) {
+      if (peek().type === '*') {
+        consume('*');
+        left = mulPoly(left, parsePower());
+      } else if (peek().type === '/') {
+        consume('/');
+        left = divideByMonomial(left, parsePower());
+      } else if (startsPrimary(peek())) {
+        left = mulPoly(left, parsePower());
+      } else {
+        break;
+      }
+    }
+    return left;
+  }
+
+  function parsePower() {
+    let left = parseUnary();
+    if (peek().type === '^') {
+      consume('^');
+      const expPoly = parseUnary();
+      const e = scalarInteger(expPoly);
+      if (e === null) throw new Error('Exponent must be an integer scalar.');
+      left = powPolySigned(left, e);
+    }
+    return left;
+  }
+
+  function parseUnary() {
+    if (peek().type === '+') {
+      consume('+');
+      return parseUnary();
+    }
+    if (peek().type === '-') {
+      consume('-');
+      return addPoly(new Map(), parseUnary(), -1);
+    }
+    return parsePrimary();
+  }
+
+  function parsePrimary() {
+    const t = peek();
+    if (t.type === 'num') {
+      consume('num');
+      return new Map([[keyOf([0, 0, 0]), t.value]]);
+    }
+    if (t.type === 'var') {
+      consume('var');
+      const exp = t.value === 'x' ? [1, 0, 0] : (t.value === 'y' ? [0, 1, 0] : [0, 0, 1]);
+      return new Map([[keyOf(exp), 1]]);
+    }
+    if (t.type === '(') {
+      consume('(');
+      const inside = parseExpression();
+      consume(')');
+      return inside;
+    }
+    throw new Error(`Unexpected token "${t.type}".`);
+  }
+
+  const poly = parseExpression();
+  if (peek().type !== 'eof') throw new Error('Could not parse full expression.');
+
+  const terms = [];
+  for (const [k] of poly.entries()) {
+    terms.push({ raw: k, exponent: parseKey(k), sign: 1 });
+  }
+  return terms;
 }
 
 function convexHullFaces(points) {

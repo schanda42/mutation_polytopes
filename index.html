@@ -1,102 +1,94 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Newton Polytope 3D Visualizer</title>
+  <title>Newton Polytope Visualizer</title>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+
   <style>
-    :root { color-scheme: dark; }
-    body {
+    html, body {
       margin: 0;
-      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      height: 100%;
+      background: #0b0e14;
+      color: #e6edf3;
+      font-family: Arial, sans-serif;
+    }
+
+    #app {
       display: grid;
-      grid-template-columns: 360px 1fr;
+      grid-template-columns: 320px 1fr;
       height: 100vh;
-      background: #0f1115;
-      color: #f0f2f7;
     }
-    aside {
-      border-right: 1px solid #2a2f3a;
-      padding: 14px;
+
+    #sidebar {
+      padding: 16px;
       overflow: auto;
-      background: #171a21;
+      background: #161b22;
+      border-right: 1px solid #30363d;
     }
-    main { position: relative; }
-    #viewer { width: 100%; height: 100%; display: block; }
-    textarea, input, button, select {
+
+    #viewer {
       width: 100%;
-      box-sizing: border-box;
-      border-radius: 8px;
-      border: 1px solid #3b4151;
-      background: #11141b;
-      color: #f0f2f7;
-      padding: 8px;
-      margin-top: 6px;
-      margin-bottom: 10px;
-      font-size: 14px;
+      height: 100vh;
+      display: block;
     }
-    button {
-      background: #2d6df8;
-      border: none;
-      cursor: pointer;
-      font-weight: 600;
-    }
-    button:hover { filter: brightness(1.08); }
-    .muted { color: #a6adc0; font-size: 12px; margin-top: -6px; margin-bottom: 10px; }
-    .panel {
-      border: 1px solid #31384a;
-      border-radius: 12px;
-      padding: 10px;
+
+    textarea, button {
+      width: 100%;
       margin-bottom: 12px;
-      background: #11141b;
+      box-sizing: border-box;
     }
+
+    textarea {
+      min-height: 80px;
+    }
+
     .face-item {
-      padding: 6px 8px;
-      border: 1px solid #333a4a;
-      border-radius: 8px;
+      padding: 8px;
       margin-bottom: 6px;
+      border: 1px solid #30363d;
       cursor: pointer;
-      font-size: 13px;
-      background: #0d1016;
     }
+
     .face-item.active {
-      border-color: #4f8cff;
-      background: #122039;
+      background: #1f6feb;
     }
-    code { color: #8bd5ff; }
-    .small { font-size: 12px; }
+
+    code {
+      background: #0d1117;
+      padding: 2px 4px;
+    }
   </style>
 </head>
 <body>
-  <aside>
-    <h2 style="margin-top:0;">Newton Polytope 3D</h2>
-    <div class="panel">
-      <label for="poly">Polynomial in <code>x,y,z</code></label>
-      <textarea id="poly" rows="6">x^3 + x*y^2*z + y^3 + z^3 + x^2*y*z^2 + 2*x*y*z</textarea>
-      <div class="muted">Write monomials naturally (e.g. <code>x^-1y^2z^2</code>, <code>xyz</code>); <code>*</code> is optional. Coefficients are ignored for the polytope.</div>
-      <button id="buildBtn">Build Polytope</button>
-    </div>
+  <div id="app">
+    <div id="sidebar">
+      <textarea id="poly">1 + x^2 + y^2 + z^2 + x*y*z</textarea>
+      <button id="buildBtn">Build polytope</button>
 
-    <div class="panel">
-      <strong>Faces</strong>
-      <div class="muted">Click a face in the list or click the highlighted triangle on the polytope.</div>
+      <h3>Faces</h3>
       <div id="faceList"></div>
+
+      <h3>Face info</h3>
+      <div id="faceInfo">None selected.</div>
+
+      <button id="basisBtn" disabled>Change basis</button>
+
+      <h3>Basis info</h3>
+      <div id="basisInfo">No basis change computed yet.</div>
     </div>
 
-    <div class="panel">
-      <strong>Selected Face</strong>
-      <div id="faceInfo" class="small">None selected.</div>
-      <button id="basisBtn" disabled>Change Basis (normal → (0,0,1))</button>
-    </div>
-
-    <div class="panel">
-      <strong>Transformed Polynomial</strong>
-      <div id="basisInfo" class="small">No basis change computed yet.</div>
-    </div>
-  </aside>
-  <main>
     <canvas id="viewer"></canvas>
-  </main>
+  </div>
 
   <script type="module" src="./main.js"></script>
 </body>

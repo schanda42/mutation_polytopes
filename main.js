@@ -35,6 +35,7 @@ let current = {
   points: [],
   faces: [],
   triangles: [],
+  hoverFace: -1,
   selectedFace: -1,
 };
 
@@ -42,12 +43,14 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
 function resize() {
-  const { clientWidth, clientHeight } = canvas;
-  renderer.setSize(clientWidth, clientHeight, false);
-  camera.aspect = clientWidth / clientHeight;
+  const width = Math.max(canvas.clientWidth, 1);
+  const height = Math.max(canvas.clientHeight, 1);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
+new ResizeObserver(resize).observe(canvas);
 resize();
 
 function gcd(a, b) {
@@ -212,7 +215,8 @@ function triangulateFaces(points, faces) {
 
 function clearGroup(group) {
   while (group.children.length) {
-    const child = group.children.pop();
+    const child = group.children[group.children.length - 1];
+    group.remove(child);
     if (child.geometry) child.geometry.dispose();
     if (child.material) {
       if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
@@ -258,37 +262,81 @@ function drawPolytope(points, triangles) {
     s.position.set(p[0], p[1], p[2]);
     polyGroup.add(s);
   }
+
+  frameCameraToPoints(points);
 }
 
-function highlightFace(faceIndex) {
-  polyGroup.children = polyGroup.children.filter((ch) => ch.userData.kind !== 'highlight');
-  const toRemove = [];
-  scene.traverse((obj) => {
-    if (obj.userData.kind === 'highlight') toRemove.push(obj);
-  });
-  toRemove.forEach((obj) => {
-    scene.remove(obj);
-    if (obj.geometry) obj.geometry.dispose();
-    if (obj.material) obj.material.dispose();
-  });
-
-  if (faceIndex < 0) return;
+function buildFaceOverlay(faceIndex, color, opacity, kind) {
+  if (faceIndex < 0) return null;
   const face = current.faces[faceIndex];
-  const ordered = face.ordered;
+  if (!face) return null;
   const triVerts = [];
-  for (let i = 1; i < ordered.length - 1; i++) {
-    [ordered[0], ordered[i], ordered[i + 1]].forEach((id) => {
+  for (let i = 1; i < face.ordered.length - 1; i++) {
+    [face.ordered[0], face.ordered[i], face.ordered[i + 1]].forEach((id) => {
       const p = current.points[id];
       triVerts.push(p[0], p[1], p[2]);
     });
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(triVerts, 3));
-  g.computeVertexNormals();
-  const m = new THREE.MeshBasicMaterial({ color: 0xff3366, side: THREE.DoubleSide, transparent: true, opacity: 0.75 });
-  const h = new THREE.Mesh(g, m);
-  h.userData.kind = 'highlight';
-  scene.add(h);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(triVerts, 3));
+  geometry.computeVertexNormals();
+  const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity });
+  const overlay = new THREE.Mesh(geometry, material);
+  overlay.userData.kind = kind;
+  return overlay;
+}
+
+function removeOverlays() {
+  const removable = [];
+  scene.traverse((obj) => {
+    if (obj.userData.kind === 'selected-highlight' || obj.userData.kind === 'hover-highlight') removable.push(obj);
+  });
+  removable.forEach((obj) => {
+    scene.remove(obj);
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) obj.material.dispose();
+  });
+}
+
+function renderHighlights() {
+  removeOverlays();
+
+  const selected = buildFaceOverlay(current.selectedFace, 0xff3366, 0.75, 'selected-highlight');
+  if (selected) scene.add(selected);
+
+  if (current.hoverFace >= 0 && current.hoverFace !== current.selectedFace) {
+    const hover = buildFaceOverlay(current.hoverFace, 0x2ef59f, 0.55, 'hover-highlight');
+    if (hover) scene.add(hover);
+  }
+}
+
+function faceFromPointerEvent(ev) {
+  const rect = canvas.getBoundingClientRect();
+  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const polyMesh = polyGroup.children.find((ch) => ch.type === 'Mesh' && ch.userData.kind === 'polytope');
+  if (!polyMesh) return -1;
+  const hits = raycaster.intersectObject(polyMesh, false);
+  if (!hits.length) return -1;
+  const triIndex = Math.floor(hits[0].faceIndex);
+  const tri = current.triangles[triIndex];
+  if (!tri) return -1;
+  return tri.faceIndex;
+}
+
+function frameCameraToPoints(points) {
+  if (!points.length) return;
+  const box = new THREE.Box3();
+  points.forEach((p) => box.expandByPoint(new THREE.Vector3(p[0], p[1], p[2])));
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const radius = Math.max(size.x, size.y, size.z) * 0.9 + 1.5;
+  camera.position.copy(center.clone().add(new THREE.Vector3(radius, radius, radius)));
+  camera.lookAt(center);
+  controls.target.copy(center);
+  controls.update();
 }
 
 function findUnimodularBasisWithNormal(n) {
@@ -366,7 +414,7 @@ function selectFace(idx) {
   if (idx < 0) {
     ui.faceInfo.textContent = 'None selected.';
     ui.basisBtn.disabled = true;
-    highlightFace(-1);
+    renderHighlights();
     return;
   }
 
@@ -377,7 +425,7 @@ function selectFace(idx) {
     Vertices: ${face.ordered.map((v) => `(${current.points[v].join(',')})`).join(', ')}
   `;
   ui.basisBtn.disabled = false;
-  highlightFace(idx);
+  renderHighlights();
 }
 
 function rebuild() {
@@ -404,7 +452,7 @@ function rebuild() {
   }
 
   const triangles = triangulateFaces(points, faces);
-  current = { ...current, terms, points, faces, triangles, selectedFace: -1 };
+  current = { ...current, terms, points, faces, triangles, hoverFace: -1, selectedFace: -1 };
   drawPolytope(points, triangles);
 
   ui.faceList.innerHTML = '';
@@ -419,6 +467,7 @@ function rebuild() {
   ui.faceInfo.textContent = 'None selected.';
   ui.basisInfo.textContent = 'No basis change computed yet.';
   ui.basisBtn.disabled = true;
+  renderHighlights();
 }
 
 ui.buildBtn.onclick = rebuild;
@@ -446,21 +495,23 @@ ui.basisBtn.onclick = () => {
 };
 
 canvas.addEventListener('pointerdown', (ev) => {
-  const rect = canvas.getBoundingClientRect();
-  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
+  const faceIndex = faceFromPointerEvent(ev);
+  if (faceIndex >= 0) selectFace(faceIndex);
+});
 
-  const polyMesh = polyGroup.children.find((ch) => ch.type === 'Mesh' && ch.userData.kind === 'polytope');
-  if (!polyMesh) return;
+canvas.addEventListener('pointermove', (ev) => {
+  const faceIndex = faceFromPointerEvent(ev);
+  if (faceIndex !== current.hoverFace) {
+    current.hoverFace = faceIndex;
+    renderHighlights();
+  }
+});
 
-  const hits = raycaster.intersectObject(polyMesh, false);
-  if (!hits.length) return;
-
-  const triIndex = Math.floor(hits[0].faceIndex / 1);
-  const tri = current.triangles[triIndex];
-  if (!tri) return;
-  selectFace(tri.faceIndex);
+canvas.addEventListener('pointerleave', () => {
+  if (current.hoverFace !== -1) {
+    current.hoverFace = -1;
+    renderHighlights();
+  }
 });
 
 function animate() {
